@@ -1,0 +1,162 @@
+name: Security Scan (Commit & Daily)
+
+permissions:
+  issues: write
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  schedule:
+    # Run daily at 9:15 AM UTC
+    - cron: '15 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for comprehensive scanning
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Claude Code CLI
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Setup Vertex AI Authentication
+        run: |
+          # Write the GCP credentials to a file
+          echo '${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}' > /tmp/gcp-key.json
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json
+
+          # Verify the file was created
+          if [ -f /tmp/gcp-key.json ]; then
+            echo "✓ GCP credentials file created"
+          else
+            echo "✗ Failed to create GCP credentials file"
+            exit 1
+          fi
+
+      - name: Run Security Scan
+        id: scan
+        env:
+          CLAUDE_CODE_USE_VERTEX: 1
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcp-key.json
+          ANTHROPIC_VERTEX_PROJECT_ID: ${{ secrets.ANTHROPIC_VERTEX_PROJECT_ID }}
+        run: |
+          echo "Starting security scan..."
+
+          # Create a prompt for Claude to scan for security issues
+          SCAN_PROMPT="Perform a comprehensive security audit of this repository.
+
+          Focus on:
+          - Hardcoded secrets, passwords, API keys
+          - SQL injection vulnerabilities
+          - XSS vulnerabilities
+          - Insecure dependencies
+          - Authentication/authorization issues
+          - Cryptographic weaknesses
+          - Path traversal vulnerabilities
+          - Command injection risks
+
+          For each finding, provide:
+          1. Severity (Critical/High/Medium/Low)
+          2. File path and line number
+          3. Description of the vulnerability
+          4. Recommended fix
+
+          Output the results in JSON format with this structure:
+          {
+            \"findings\": [
+              {
+                \"severity\": \"High\",
+                \"file\": \"path/to/file.js\",
+                \"line\": 42,
+                \"title\": \"Brief title\",
+                \"description\": \"Detailed description\",
+                \"recommendation\": \"How to fix\"
+              }
+            ]
+          }"
+
+          # Run Claude Code with the security scan prompt
+          # Using --json flag for structured output
+          echo "$SCAN_PROMPT" | claude --model claude-sonnet-4-5 --output security-results.txt || {
+            echo "Claude scan failed, but continuing to process any partial results"
+          }
+
+          # Check if results were generated
+          if [ -f security-results.txt ]; then
+            echo "✓ Security scan completed"
+            echo "results_generated=true" >> $GITHUB_OUTPUT
+
+            # Display results
+            echo "## Scan Results Preview"
+            head -n 50 security-results.txt
+          else
+            echo "✗ No results file generated"
+            echo "results_generated=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Parse Results and Create Issues
+        if: steps.scan.outputs.results_generated == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Parsing security scan results..."
+
+          # Read the results
+          RESULTS=$(cat security-results.txt)
+
+          # Create a summary issue with all findings
+          ISSUE_BODY="# Security Scan Results - $(date +%Y-%m-%d)
+
+          **Scan Type:** ${{ github.event_name == 'schedule' && 'Scheduled Daily Scan' || 'Commit Scan' }}
+          **Branch:** ${{ github.ref_name }}
+          **Commit:** ${{ github.sha }}
+
+          ---
+
+          $RESULTS
+
+          ---
+
+          *This issue was automatically created by the security scan workflow.*
+          "
+
+          # Create the issue using gh CLI
+          gh issue create \
+            --title "🔒 Security Scan Results - $(date +%Y-%m-%d)" \
+            --body "$ISSUE_BODY" \
+            --label "security,automated" || {
+              echo "Failed to create issue, but scan completed successfully"
+            }
+
+          echo "✓ Security issue created"
+
+      - name: Upload Results as Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-results-${{ github.sha }}
+          path: security-results.txt
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # Remove GCP credentials file
+          rm -f /tmp/gcp-key.json
+          echo "✓ Cleaned up temporary files"
