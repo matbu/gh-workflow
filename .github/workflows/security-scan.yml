@@ -90,8 +90,8 @@ jobs:
           }"
 
           # Run Claude Code with the security scan prompt
-          # Using --json flag for structured output
-          echo "$SCAN_PROMPT" | claude --model claude-sonnet-4-5 --output security-results.txt || {
+          # Redirect output to file
+          echo "$SCAN_PROMPT" | claude --model claude-sonnet-4-5 > security-results.txt 2>&1 || {
             echo "Claude scan failed, but continuing to process any partial results"
           }
 
