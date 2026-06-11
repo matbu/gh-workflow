@@ -1,0 +1,36 @@
+name: Security Review
+
+permissions:
+  issues: write      # Needed for creating issues
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  schedule:
+    # Run daily at 9:15 AM UTC (off the :00 and :30 marks to reduce API load)
+    - cron: '15 9 * * *'
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for comprehensive scanning
+
+      - name: Security Review with Claude via Vertex AI
+        uses: anthropics/claude-code-security-review@main
+        env:
+          CLAUDE_CODE_USE_VERTEX: 1
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          ANTHROPIC_VERTEX_PROJECT_ID: ${{ secrets.ANTHROPIC_VERTEX_PROJECT_ID }}
+        with:
+          # On push events, comment is not applicable (no PR)
+          # On schedule, create issues for findings
+          comment-pr: false
+          create-issues: true
+          severity-threshold: medium  # Only create issues for medium+ severity
