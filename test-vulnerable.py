@@ -9,7 +9,7 @@ import subprocess
 
 # VULNERABILITY 1: Hardcoded credentials
 DATABASE_PASSWORD = "SuperSecret123!"
-API_KEY = "sk-1234567890abcdef"
+API_KEY = "sk-1234567890abcdedddf"
 
 # VULNERABILITY 2: SQL Injection
 def get_user(username):
